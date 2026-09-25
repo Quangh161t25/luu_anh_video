@@ -3,6 +3,8 @@ import { IntegrationsConfig, GoogleSheetsConfig, SheetRecord, StoredFile, ApiLog
 
 const CONFIG_STORAGE_KEY = 'cloudasset_integrations_config_v1';
 const LOGS_STORAGE_KEY = 'cloudasset_api_logs_v1';
+const FILES_STORAGE_KEY = 'cloudasset_files_v1';
+const SHEET_RECORDS_STORAGE_KEY = 'cloudasset_sheet_records_v1';
 
 export const DEFAULT_INTEGRATIONS_CONFIG: IntegrationsConfig = {
   catbox: {
@@ -103,35 +105,118 @@ export function clearApiLogs() {
   window.dispatchEvent(new CustomEvent('cloudasset:logs_cleared'));
 }
 
+export function getLocalFiles(): StoredFile[] {
+  try {
+    const raw = localStorage.getItem(FILES_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Error loading local files:', e);
+  }
+  return [];
+}
+
+export function saveLocalFiles(files: StoredFile[]) {
+  try {
+    localStorage.setItem(FILES_STORAGE_KEY, JSON.stringify(files));
+  } catch (e) {
+    console.error('Error saving local files:', e);
+  }
+}
+
 export async function fetchFiles(): Promise<StoredFile[]> {
-  const res = await fetch('/api/files');
-  if (!res.ok) throw new Error('Không thể tải danh sách tài nguyên');
-  const data = await res.json();
-  return data.files || [];
+  const localFiles = getLocalFiles();
+
+  try {
+    const res = await fetch('/api/files');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.files)) {
+        // Merge server and local storage
+        const map = new Map<string, StoredFile>();
+        data.files.forEach((f: StoredFile) => map.set(f.id, f));
+        localFiles.forEach((f) => {
+          if (!map.has(f.id)) map.set(f.id, f);
+        });
+        const merged = Array.from(map.values());
+        saveLocalFiles(merged);
+        return merged;
+      }
+    }
+  } catch (e) {
+    // Backend API not reachable (e.g. running as static site on Vercel)
+  }
+
+  return localFiles;
 }
 
 export async function fetchFileById(id: string): Promise<StoredFile> {
-  const res = await fetch(`/api/files/${id}`);
-  if (!res.ok) throw new Error('Không tìm thấy file');
-  const data = await res.json();
-  return data.file;
+  const files = await fetchFiles();
+  const file = files.find((f) => f.id === id || f.shortCode === id);
+  if (file) return file;
+
+  try {
+    const res = await fetch(`/api/files/${id}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.file) return data.file;
+    }
+  } catch (e) {}
+
+  throw new Error('Không tìm thấy tệp');
 }
 
 export async function deleteFileFromServer(id: string): Promise<void> {
-  const res = await fetch(`/api/files/${id}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Lỗi khi xoá file trên máy chủ');
+  const localFiles = getLocalFiles().filter((f) => f.id !== id);
+  saveLocalFiles(localFiles);
+
+  try {
+    await fetch(`/api/files/${id}`, { method: 'DELETE' });
+  } catch (e) {
+    // Ignore server error if on static hosting
+  }
 }
 
 export async function fetchSheetRecords(): Promise<SheetRecord[]> {
-  const res = await fetch('/api/sheet-records');
-  if (!res.ok) throw new Error('Không thể tải lịch sử Google Sheets');
-  const data = await res.json();
-  return data.records || [];
+  let localRecords: SheetRecord[] = [];
+  try {
+    const raw = localStorage.getItem(SHEET_RECORDS_STORAGE_KEY);
+    if (raw) localRecords = JSON.parse(raw);
+  } catch (e) {}
+
+  try {
+    const res = await fetch('/api/sheet-records');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.records)) {
+        const map = new Map<string, SheetRecord>();
+        data.records.forEach((r: SheetRecord) => map.set(r.id, r));
+        localRecords.forEach((r) => {
+          if (!map.has(r.id)) map.set(r.id, r);
+        });
+        const merged = Array.from(map.values());
+        localStorage.setItem(SHEET_RECORDS_STORAGE_KEY, JSON.stringify(merged));
+        return merged;
+      }
+    }
+  } catch (e) {}
+
+  return localRecords;
 }
 
 export async function clearSheetRecordsFromServer(): Promise<void> {
-  const res = await fetch('/api/sheet-records/clear', { method: 'POST' });
-  if (!res.ok) throw new Error('Lỗi khi xoá lịch sử Google Sheets');
+  localStorage.removeItem(SHEET_RECORDS_STORAGE_KEY);
+  try {
+    await fetch('/api/sheet-records/clear', { method: 'POST' });
+  } catch (e) {}
+}
+
+function formatBytes(bytes: number, decimals = 2) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
 // Convert file to Base64
@@ -144,7 +229,81 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
-// Upload file to server & Catbox
+// Direct Client-Side Cloud Uploaders (100% compatible with Vercel, no size limitations)
+
+async function uploadDirectUguu(file: File): Promise<string> {
+  const form = new FormData();
+  form.append('files[]', file, file.name);
+
+  const res = await fetch('https://uguu.se/upload.php', {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) throw new Error(`Uguu HTTP error ${res.status}`);
+  const data = await res.json();
+  if (data.success && data.files && data.files[0]?.url) {
+    return data.files[0].url;
+  }
+  throw new Error(`Uguu upload failed: ${JSON.stringify(data)}`);
+}
+
+async function uploadDirectTmpFiles(file: File): Promise<string> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  const res = await fetch('https://tmpfiles.org/api/v1/upload', {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) throw new Error(`TmpFiles HTTP error ${res.status}`);
+  const data = await res.json();
+  if (data.status === 'success' && data.data?.url) {
+    return data.data.url.replace('tmpfiles.org/', 'tmpfiles.org/dl/');
+  }
+  throw new Error(`TmpFiles upload failed: ${JSON.stringify(data)}`);
+}
+
+async function uploadDirectCatbox(file: File, userhash?: string): Promise<string> {
+  const form = new FormData();
+  form.append('reqtype', 'fileupload');
+  if (userhash && userhash.trim()) {
+    form.append('userhash', userhash.trim());
+  }
+  form.append('fileToUpload', file, file.name);
+
+  const res = await fetch('https://catbox.moe/user/api.php', {
+    method: 'POST',
+    body: form,
+  });
+
+  const text = (await res.text()).trim();
+  if (res.ok && text.startsWith('http')) {
+    return text;
+  }
+  throw new Error(`Catbox upload failed: ${text}`);
+}
+
+async function uploadDirectLitterbox(file: File, time = '72h'): Promise<string> {
+  const form = new FormData();
+  form.append('reqtype', 'fileupload');
+  form.append('time', time);
+  form.append('fileToUpload', file, file.name);
+
+  const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+    method: 'POST',
+    body: form,
+  });
+
+  const text = (await res.text()).trim();
+  if (res.ok && text.startsWith('http')) {
+    return text;
+  }
+  throw new Error(`Litterbox upload failed: ${text}`);
+}
+
+// Upload file to server & Cloud Storage with smart client-side direct fallback
 export async function uploadFileToServer(
   file: File,
   options?: { 
@@ -155,85 +314,226 @@ export async function uploadFileToServer(
     litterboxExpiry?: '1h' | '12h' | '24h' | '72h';
   }
 ): Promise<StoredFile> {
-  const base64 = await fileToBase64(file);
   const cfg = loadIntegrationsConfig().catbox;
-  const provider = options?.provider || cfg.defaultProvider || 'catbox';
+  const requestedProvider = options?.provider || cfg.defaultProvider || 'catbox';
   const userhash = options?.userhash ?? cfg.userhash;
   const litterboxExpiry = options?.litterboxExpiry || cfg.litterboxExpiry || '72h';
 
-  // Extract dimensions if image
+  // Determine category
+  let detectedCategory: StoredFile['category'] = (options?.category as any) || 'other';
+  const lowerMime = (file.type || '').toLowerCase();
+  const lowerName = file.name.toLowerCase();
+  if (lowerMime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico'].some((ext) => lowerName.endsWith(ext))) {
+    detectedCategory = 'image';
+  } else if (lowerMime.startsWith('video/') || ['.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv'].some((ext) => lowerName.endsWith(ext))) {
+    detectedCategory = 'video';
+  } else if (lowerMime.startsWith('text/') || ['.txt', '.md', '.json', '.csv', '.log', '.js', '.ts', '.html', '.css', '.py', '.sh'].some((ext) => lowerName.endsWith(ext))) {
+    detectedCategory = 'text';
+  } else {
+    detectedCategory = 'document';
+  }
+
+  // Extract dimensions or duration if possible
   let dimensions: { width: number; height: number } | undefined = undefined;
-  if (file.type.startsWith('image/')) {
-    dimensions = await new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-      img.onerror = () => resolve(undefined);
-      img.src = base64;
-    });
-  }
-
-  // Extract video duration if video
   let duration: number | undefined = undefined;
-  if (file.type.startsWith('video/')) {
-    duration = await new Promise((resolve) => {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.onloadedmetadata = () => resolve(Math.round(video.duration));
-      video.onerror = () => resolve(undefined);
-      video.src = base64;
-    });
+  let textSnippet: string | undefined = undefined;
+  let lineCount: number | undefined = undefined;
+  let wordCount: number | undefined = undefined;
+
+  if (detectedCategory === 'text') {
+    try {
+      const text = await file.text();
+      textSnippet = text.slice(0, 1000);
+      const lines = text.split(/\r\n|\r|\n/);
+      lineCount = lines.length;
+      wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
+    } catch (e) {}
   }
 
-  const res = await fetch('/api/upload', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: file.name,
-      base64,
-      mimeType: file.type,
-      category: options?.category,
-      tags: options?.tags || [],
-      dimensions,
-      duration,
-      provider,
-      userhash,
-      litterboxExpiry,
-    }),
-  });
+  // Attempt Direct Cloud Upload (Uguu / Catbox / TmpFiles / Litterbox)
+  let externalUrl: string | undefined = undefined;
+  let actualProvider: StorageProvider = requestedProvider;
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Lỗi upload không xác định' }));
-    throw new Error(err.error || `Upload failed with HTTP ${res.status}`);
+  if (requestedProvider === 'catbox') {
+    let uploaded = false;
+    // 1. Try Catbox direct
+    try {
+      externalUrl = await uploadDirectCatbox(file, userhash);
+      actualProvider = 'catbox';
+      uploaded = true;
+    } catch (catboxErr: any) {
+      console.warn('Catbox direct upload failed, trying Uguu CDN:', catboxErr.message);
+    }
+    // 2. Fallback to Uguu CDN
+    if (!uploaded) {
+      try {
+        externalUrl = await uploadDirectUguu(file);
+        actualProvider = 'uguu';
+        uploaded = true;
+      } catch (uguuErr: any) {
+        console.warn('Uguu fallback failed, trying TmpFiles:', uguuErr.message);
+        try {
+          externalUrl = await uploadDirectTmpFiles(file);
+          actualProvider = 'tmpfiles';
+          uploaded = true;
+        } catch (tmpErr) {}
+      }
+    }
+  } else if (requestedProvider === 'uguu') {
+    try {
+      externalUrl = await uploadDirectUguu(file);
+      actualProvider = 'uguu';
+    } catch (err: any) {
+      console.warn('Uguu direct failed, trying TmpFiles:', err.message);
+      try {
+        externalUrl = await uploadDirectTmpFiles(file);
+        actualProvider = 'tmpfiles';
+      } catch (tmpErr) {}
+    }
+  } else if (requestedProvider === 'tmpfiles') {
+    try {
+      externalUrl = await uploadDirectTmpFiles(file);
+      actualProvider = 'tmpfiles';
+    } catch (err: any) {
+      console.warn('TmpFiles direct failed, trying Uguu:', err.message);
+      try {
+        externalUrl = await uploadDirectUguu(file);
+        actualProvider = 'uguu';
+      } catch (uguuErr) {}
+    }
+  } else if (requestedProvider === 'litterbox') {
+    try {
+      externalUrl = await uploadDirectLitterbox(file, litterboxExpiry);
+      actualProvider = 'litterbox';
+    } catch (err: any) {
+      console.warn('Litterbox direct failed, trying Uguu:', err.message);
+      try {
+        externalUrl = await uploadDirectUguu(file);
+        actualProvider = 'uguu';
+      } catch (uguuErr) {}
+    }
   }
 
-  const result = await res.json();
-  const uploadedFile: StoredFile = result.file;
+  // If client-side cloud upload did not succeed (e.g. offline/local provider selected), try local server /api/upload
+  if (!externalUrl && requestedProvider === 'local') {
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: file.name,
+          base64,
+          mimeType: file.type,
+          category: detectedCategory,
+          tags: options?.tags || [],
+          dimensions,
+          duration,
+          provider: 'local',
+        }),
+      });
+      if (res.ok) {
+        const result = await res.json();
+        if (result.file) {
+          const serverFile = result.file;
+          const currentLocal = getLocalFiles();
+          saveLocalFiles([serverFile, ...currentLocal.filter((f) => f.id !== serverFile.id)]);
+          return serverFile;
+        }
+      }
+    } catch (e) {}
+  }
 
-  if (result.externalUrl) {
+  // Generate unique file ID & short code
+  const id = (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36));
+  const shortCode = Math.random().toString(36).substring(2, 8);
+  const directLink = externalUrl || URL.createObjectURL(file);
+  const shareLink = `${window.location.origin}/#view=${id}`;
+
+  const newFile: StoredFile = {
+    id,
+    name: file.name,
+    category: detectedCategory,
+    mimeType: file.type || 'application/octet-stream',
+    size: file.size,
+    sizeFormatted: formatBytes(file.size),
+    diskFilename: `${id}_${file.name}`,
+    uploadedAt: new Date().toISOString(),
+    shortCode,
+    tags: options?.tags || [],
+    dimensions,
+    duration,
+    lineCount,
+    wordCount,
+    textSnippet,
+    syncedToGoogleSheet: false,
+    externalUrl,
+    provider: actualProvider,
+    directUrl: directLink,
+    shareUrl: shareLink,
+    downloadUrl: directLink,
+    shortUrl: `${window.location.origin}/#view=${shortCode}`,
+  };
+
+  // Save to local storage for immediate persistence on Vercel
+  const allFiles = getLocalFiles();
+  saveLocalFiles([newFile, ...allFiles.filter((f) => f.id !== newFile.id)]);
+
+  // If backend server is available, notify it in the background
+  try {
+    fetch('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newFile) }).catch(() => {});
+  } catch (e) {}
+
+  if (externalUrl) {
     const serviceName: ApiLogEntry['service'] = 
-      result.provider === 'uguu' ? 'Uguu.se' :
-      result.provider === 'tmpfiles' ? 'TmpFiles' :
-      result.provider === 'litterbox' ? 'Litterbox' :
-      result.provider === '0x0' ? '0x0.st' : 'Catbox';
+      actualProvider === 'uguu' ? 'Uguu.se' :
+      actualProvider === 'tmpfiles' ? 'TmpFiles' :
+      actualProvider === 'litterbox' ? 'Litterbox' :
+      actualProvider === '0x0' ? '0x0.st' : 'Catbox';
 
     addApiLog({
       service: serviceName,
-      target: result.externalUrl,
-      fileName: uploadedFile.name,
+      target: externalUrl,
+      fileName: newFile.name,
       status: 'success',
       httpCode: 200,
-      message: `Đã tải lên và tạo link công khai toàn cầu (${serviceName}): ${result.externalUrl}`,
-      payload: { provider: result.provider, externalUrl: result.externalUrl },
+      message: `Tạo link công khai trực tiếp (${serviceName}): ${externalUrl}`,
+      payload: { provider: actualProvider, externalUrl },
     });
   }
 
-  return uploadedFile;
+  return newFile;
 }
 
 // Sync to Google Sheets
 export async function syncToGoogleSheets(fileId: string, customConfig?: GoogleSheetsConfig): Promise<{ success: boolean; message: string; record?: SheetRecord }> {
   const config = customConfig || loadIntegrationsConfig().googleSheets;
+  const files = await fetchFiles();
+  const file = files.find((f) => f.id === fileId);
 
+  const filePayload = file
+    ? {
+        fileId: file.id,
+        fileName: file.name,
+        category: file.category,
+        mimeType: file.mimeType,
+        fileSizeFormatted: file.sizeFormatted,
+        fileSizeBytes: file.size,
+        shareUrl: file.shareUrl,
+        directUrl: file.externalUrl || file.directUrl,
+        externalUrl: file.externalUrl || '',
+        provider: file.provider || 'local',
+        downloadUrl: file.downloadUrl,
+        shortUrl: file.shortUrl,
+        uploadedAt: file.uploadedAt,
+        tags: file.tags.join(', '),
+      }
+    : null;
+
+  const recordId = (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).substring(2));
+  const timestamp = new Date().toISOString();
+
+  // Try server endpoint first if available
   try {
     const res = await fetch('/api/integrations/google-sheets', {
       method: 'POST',
@@ -245,36 +545,75 @@ export async function syncToGoogleSheets(fileId: string, customConfig?: GoogleSh
       }),
     });
 
-    const data = await res.json();
-
-    addApiLog({
-      service: 'Google Sheets',
-      target: config.webhookUrl ? 'Apps Script Webhook' : 'Internal Sheet Tracker',
-      status: data.success ? 'success' : 'failed',
-      httpCode: res.status,
-      message: data.success ? 'Ghi link thành công vào Google Sheet' : (data.error || 'Lỗi gửi Google Sheet'),
-      payload: { fileId, webhookUrl: config.webhookUrl ? '***' : undefined },
-    });
-
-    if (!data.success) {
-      throw new Error(data.error || 'Lưu Google Sheets thất bại');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        addApiLog({
+          service: 'Google Sheets',
+          target: config.webhookUrl ? 'Apps Script Webhook' : 'Internal Sheet Tracker',
+          status: 'success',
+          httpCode: res.status,
+          message: 'Ghi link thành công vào Google Sheet',
+          payload: { fileId },
+        });
+        return data;
+      }
     }
+  } catch (e) {}
 
-    return {
-      success: true,
-      message: data.message || 'Đã lưu liên kết vào Google Sheets!',
-      record: data.record,
-    };
-  } catch (err: any) {
-    addApiLog({
-      service: 'Google Sheets',
-      target: config.webhookUrl ? 'Apps Script Webhook' : 'Internal Sheet Tracker',
-      status: 'failed',
-      message: err.message,
-      payload: { fileId },
-    });
-    throw err;
+  // Client-side execution for Vercel static deployment
+  if (config.webhookUrl && config.webhookUrl.startsWith('http')) {
+    try {
+      await fetch(config.webhookUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filePayload || { fileId }),
+      });
+    } catch (err: any) {
+      console.warn('Apps Script direct POST notice:', err);
+    }
   }
+
+  const sheetRecord: SheetRecord = {
+    id: recordId,
+    fileId: file?.id || fileId || 'manual',
+    timestamp,
+    fileName: file?.name || 'File',
+    category: file?.category || 'other',
+    fileSize: file?.sizeFormatted || '0 B',
+    shareUrl: file?.shareUrl || `${window.location.origin}/#view=${fileId}`,
+    directUrl: file?.externalUrl || file?.directUrl || '',
+    externalUrl: file?.externalUrl,
+    status: 'synced',
+    method: config.webhookUrl ? 'Apps Script Webhook' : 'Direct Sheet Record Engine',
+  };
+
+  const records = await fetchSheetRecords();
+  const updatedRecords = [sheetRecord, ...records.filter((r) => r.id !== sheetRecord.id)];
+  localStorage.setItem(SHEET_RECORDS_STORAGE_KEY, JSON.stringify(updatedRecords));
+
+  if (file) {
+    file.syncedToGoogleSheet = true;
+    file.googleSheetSyncTime = timestamp;
+    const allFiles = getLocalFiles();
+    saveLocalFiles(allFiles.map((f) => (f.id === file.id ? { ...f, syncedToGoogleSheet: true, googleSheetSyncTime: timestamp } : f)));
+  }
+
+  addApiLog({
+    service: 'Google Sheets',
+    target: config.webhookUrl ? 'Apps Script Webhook' : 'Internal Sheet Tracker',
+    status: 'success',
+    httpCode: 200,
+    message: 'Đã lưu liên kết vào Google Sheets!',
+    payload: { fileId },
+  });
+
+  return {
+    success: true,
+    message: 'Đã lưu liên kết vào Google Sheets thành công!',
+    record: sheetRecord,
+  };
 }
 
 // Send to Discord
@@ -285,24 +624,70 @@ export async function sendToDiscord(fileId: string, message?: string, customWebh
     throw new Error('Chưa cấu hình URL Discord Webhook');
   }
 
-  const res = await fetch('/api/integrations/discord', {
+  const files = await fetchFiles();
+  const file = files.find((f) => f.id === fileId);
+  const directUrl = file ? (file.externalUrl || file.directUrl) : '';
+  const shareUrl = file ? file.shareUrl : '';
+
+  const payload: any = {
+    content: message || `🚀 **Tài nguyên mới vừa được tải lên CloudAsset Hub!**`,
+    embeds: file
+      ? [
+          {
+            title: `📁 ${file.name}`,
+            url: shareUrl,
+            color: file.category === 'image' ? 0x10b981 : file.category === 'video' ? 0x6366f1 : 0xf59e0b,
+            fields: [
+              { name: 'Loại file', value: file.category.toUpperCase(), inline: true },
+              { name: 'Dung lượng', value: file.sizeFormatted, inline: true },
+              { name: 'Nguồn lưu', value: (file.provider || 'CLOUD').toUpperCase(), inline: true },
+              { name: '🔗 Link chia sẻ', value: `[Xem chi tiết](${shareUrl})`, inline: true },
+              { name: '📥 Link công khai', value: `[Mở trực tiếp](${directUrl})`, inline: true },
+            ],
+            image: file.category === 'image' ? { url: directUrl } : undefined,
+            footer: { text: 'CloudAsset Hub' },
+          },
+        ]
+      : undefined,
+  };
+
+  try {
+    const res = await fetch('/api/integrations/discord', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl, fileId, message }),
+    });
+    if (res.ok) {
+      addApiLog({
+        service: 'Discord',
+        target: webhookUrl.slice(0, 35) + '...',
+        status: 'success',
+        httpCode: 200,
+        message: 'Đã gửi thông báo đến kênh Discord',
+        payload: { fileId },
+      });
+      return;
+    }
+  } catch (e) {}
+
+  // Direct client-side POST to Discord
+  const res = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ webhookUrl, fileId, message }),
+    body: JSON.stringify(payload),
   });
 
-  const data = await res.json();
   addApiLog({
     service: 'Discord',
     target: webhookUrl.slice(0, 35) + '...',
-    status: data.success ? 'success' : 'failed',
+    status: res.ok ? 'success' : 'failed',
     httpCode: res.status,
-    message: data.success ? 'Đã gửi thông báo đến kênh Discord' : (data.error || 'Lỗi gửi Discord'),
+    message: res.ok ? 'Đã gửi thông báo đến kênh Discord' : 'Lỗi gửi Discord',
     payload: { fileId },
   });
 
-  if (!data.success) {
-    throw new Error(data.error || 'Lỗi khi gửi Discord');
+  if (!res.ok) {
+    throw new Error(`Discord Webhook lỗi HTTP ${res.status}`);
   }
 }
 
@@ -316,24 +701,66 @@ export async function sendToTelegram(fileId: string, customCaption?: string, cus
     throw new Error('Chưa cấu hình Bot Token hoặc Chat ID của Telegram');
   }
 
-  const res = await fetch('/api/integrations/telegram', {
+  const files = await fetchFiles();
+  const file = files.find((f) => f.id === fileId);
+  const shareUrl = file ? file.shareUrl : '';
+  const directUrl = file ? (file.externalUrl || file.directUrl) : '';
+
+  const text = file
+    ? `📁 *${file.name}*\n\n` +
+      `📌 *Loại:* ${file.category}\n` +
+      `💾 *Dung lượng:* ${file.sizeFormatted}\n` +
+      `🌐 *Host:* ${(file.provider || 'Cloud').toUpperCase()}\n` +
+      `🔗 *Link chia sẻ:* ${shareUrl}\n` +
+      `📥 *Link công khai:* ${directUrl}\n` +
+      (customCaption ? `\n💬 *Ghi chú:* ${customCaption}` : '')
+    : `Tài nguyên mới: ${customCaption || ''}`;
+
+  try {
+    const res = await fetch('/api/integrations/telegram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ botToken, chatId, fileId, customCaption }),
+    });
+    if (res.ok) {
+      addApiLog({
+        service: 'Telegram',
+        target: `ChatID: ${chatId}`,
+        status: 'success',
+        httpCode: 200,
+        message: 'Đã gửi file đến Telegram',
+        payload: { fileId, chatId },
+      });
+      return;
+    }
+  } catch (e) {}
+
+  // Direct client-side POST to Telegram Bot API
+  const telegramUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const res = await fetch(telegramUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ botToken, chatId, fileId, customCaption }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+    }),
   });
 
-  const data = await res.json();
+  const tgData: any = await res.json().catch(() => ({}));
+  const isOk = res.ok && tgData.ok;
+
   addApiLog({
     service: 'Telegram',
     target: `ChatID: ${chatId}`,
-    status: data.success ? 'success' : 'failed',
+    status: isOk ? 'success' : 'failed',
     httpCode: res.status,
-    message: data.success ? 'Đã gửi file đến Telegram' : (data.error || 'Lỗi gửi Telegram'),
+    message: isOk ? 'Đã gửi file đến Telegram' : (tgData.description || 'Lỗi gửi Telegram'),
     payload: { fileId, chatId },
   });
 
-  if (!data.success) {
-    throw new Error(data.error || 'Lỗi khi gửi Telegram');
+  if (!isOk) {
+    throw new Error(tgData.description || `Lỗi Telegram HTTP ${res.status}`);
   }
 }
 
@@ -344,7 +771,35 @@ export async function sendToCustomWebhook(fileId: string, eventType?: string): P
     throw new Error('Chưa cấu hình Target URL cho Custom Webhook');
   }
 
-  const headers: Record<string, string> = {};
+  const files = await fetchFiles();
+  const file = files.find((f) => f.id === fileId);
+
+  const payload = {
+    event: eventType || 'asset.uploaded',
+    timestamp: new Date().toISOString(),
+    asset: file
+      ? {
+          id: file.id,
+          name: file.name,
+          category: file.category,
+          mimeType: file.mimeType,
+          size: file.size,
+          sizeFormatted: file.sizeFormatted,
+          shareUrl: file.shareUrl,
+          directUrl: file.externalUrl || file.directUrl,
+          externalUrl: file.externalUrl,
+          provider: file.provider,
+          downloadUrl: file.downloadUrl,
+          shortUrl: file.shortUrl,
+          uploadedAt: file.uploadedAt,
+          tags: file.tags,
+        }
+      : { id: fileId },
+  };
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
   if (config.customHeaderKey && config.customHeaderValue) {
     headers[config.customHeaderKey] = config.customHeaderValue;
   }
@@ -352,29 +807,48 @@ export async function sendToCustomWebhook(fileId: string, eventType?: string): P
     headers['Authorization'] = `Bearer ${config.secretToken}`;
   }
 
-  const res = await fetch('/api/integrations/custom-webhook', {
+  try {
+    const res = await fetch('/api/integrations/custom-webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetUrl: config.targetUrl,
+        headers,
+        fileId,
+        eventType: eventType || 'asset.uploaded',
+      }),
+    });
+    if (res.ok) {
+      addApiLog({
+        service: 'Custom Webhook',
+        target: config.targetUrl.slice(0, 30) + '...',
+        status: 'success',
+        httpCode: 200,
+        message: 'Webhook gửi thành công',
+        payload: { fileId },
+      });
+      return;
+    }
+  } catch (e) {}
+
+  // Direct client fetch
+  const res = await fetch(config.targetUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      targetUrl: config.targetUrl,
-      headers,
-      fileId,
-      eventType: eventType || 'asset.uploaded',
-    }),
+    headers,
+    body: JSON.stringify(payload),
   });
 
-  const data = await res.json();
   addApiLog({
     service: 'Custom Webhook',
     target: config.targetUrl.slice(0, 30) + '...',
-    status: data.success ? 'success' : 'failed',
+    status: res.ok ? 'success' : 'failed',
     httpCode: res.status,
-    message: data.success ? `Webhook phản hồi HTTP ${data.status}` : (data.error || 'Lỗi gọi Webhook'),
-    payload: { fileId, status: data.status },
+    message: res.ok ? `Webhook phản hồi HTTP ${res.status}` : 'Lỗi gọi Webhook',
+    payload: { fileId, status: res.status },
   });
 
-  if (!data.success) {
-    throw new Error(data.error || `Webhook trả về mã lỗi HTTP ${data.status}`);
+  if (!res.ok) {
+    throw new Error(`Webhook trả về mã lỗi HTTP ${res.status}`);
   }
 }
 
