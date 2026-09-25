@@ -266,6 +266,30 @@ async function uploadDirectTmpFiles(file: File): Promise<string> {
 }
 
 async function uploadDirectCatbox(file: File, userhash?: string): Promise<string> {
+  // 1. Try our Catbox API proxy (/api/catbox) which avoids browser CORS completely
+  try {
+    const res = await fetch('/api/catbox', {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'x-filename': encodeURIComponent(file.name),
+        'x-userhash': userhash || '',
+        'x-reqtype': 'fileupload',
+      },
+      body: file,
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.url) {
+        return data.url;
+      }
+    }
+  } catch (proxyErr) {
+    console.warn('Catbox API proxy failed, trying direct browser request:', proxyErr);
+  }
+
+  // 2. Direct browser upload fallback
   const form = new FormData();
   form.append('reqtype', 'fileupload');
   if (userhash && userhash.trim()) {
@@ -286,6 +310,28 @@ async function uploadDirectCatbox(file: File, userhash?: string): Promise<string
 }
 
 async function uploadDirectLitterbox(file: File, time = '72h'): Promise<string> {
+  // 1. Try our Catbox API proxy (/api/catbox)
+  try {
+    const res = await fetch('/api/catbox', {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'x-filename': encodeURIComponent(file.name),
+        'x-reqtype': 'litterbox',
+        'x-time': time,
+      },
+      body: file,
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.url) {
+        return data.url;
+      }
+    }
+  } catch (proxyErr) {}
+
+  // 2. Direct browser upload fallback
   const form = new FormData();
   form.append('reqtype', 'fileupload');
   form.append('time', time);

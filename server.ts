@@ -255,6 +255,51 @@ async function uploadToNullPointer(buffer: Buffer, filename: string, mimeType: s
 
 // ================= API ROUTES =================
 
+// 0. Catbox Proxy Route for Browser Uploads
+app.post('/api/catbox', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
+  try {
+    const rawFilename = (req.headers['x-filename'] as string) || 'file.bin';
+    const filename = decodeURIComponent(rawFilename);
+    const userhash = (req.headers['x-userhash'] as string) || '';
+    const reqtype = (req.headers['x-reqtype'] as string) || 'fileupload';
+    const time = (req.headers['x-time'] as string) || '72h';
+    const isLitterbox = reqtype === 'litterbox';
+    const targetUrl = isLitterbox
+      ? 'https://litterbox.catbox.moe/resources/internals/api.php'
+      : 'https://catbox.moe/user/api.php';
+
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '');
+    const form = new FormData();
+    form.append('reqtype', 'fileupload');
+    if (isLitterbox) {
+      form.append('time', time);
+    }
+    if (userhash && userhash.trim()) {
+      form.append('userhash', userhash.trim());
+    }
+    const blob = new Blob([new Uint8Array(buffer)]);
+    form.append('fileToUpload', blob, filename);
+
+    const catboxRes = await fetch(targetUrl, {
+      method: 'POST',
+      body: form,
+      headers: {
+        'User-Agent': 'CloudAssetHub/1.0',
+      },
+    });
+
+    const resultText = (await catboxRes.text()).trim();
+    if (catboxRes.ok && resultText.startsWith('http')) {
+      return res.json({ success: true, url: resultText });
+    }
+
+    return res.status(catboxRes.status || 500).json({ success: false, error: resultText });
+  } catch (err: any) {
+    console.error('Catbox proxy error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 1. Get all files
 app.get('/api/files', (req, res) => {
   const files = loadFiles();
