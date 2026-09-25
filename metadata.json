@@ -1,0 +1,6 @@
+{
+  "name": "CloudAsset Hub & Link Exchanger",
+  "description": "Trung tâm quản lý tài nguyên tập trung (ảnh, video, txt), tạo link chia sẻ trực tiếp, tích hợp Google Sheets và API bên ngoài.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
