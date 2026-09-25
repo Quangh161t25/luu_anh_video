@@ -440,13 +440,31 @@ export const AssetManager: React.FC<AssetManagerProps> = ({
                     </div>
                   )}
 
-                  {/* Catbox / Public Host Badge */}
+                  {/* Storage Provider Badge */}
                   {file.externalUrl && (
                     <div
-                      className="absolute bottom-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-950/90 border border-indigo-500/50 text-indigo-300 text-[10px] font-semibold backdrop-blur-sm"
+                      className={`absolute bottom-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold backdrop-blur-sm border ${
+                        file.provider === 'imgbb'
+                          ? 'bg-pink-950/90 border-pink-500/50 text-pink-300'
+                          : file.provider === 'uguu'
+                          ? 'bg-cyan-950/90 border-cyan-500/50 text-cyan-300'
+                          : file.provider === 'tmpfiles'
+                          ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
+                          : 'bg-indigo-950/90 border-indigo-500/50 text-indigo-300'
+                      }`}
                       title="Link công khai toàn cầu mở được mọi nơi"
                     >
-                      <span>🐱 Catbox Công Khai</span>
+                      <span>
+                        {file.provider === 'imgbb'
+                          ? '🖼️ ImgBB'
+                          : file.provider === 'uguu'
+                          ? '⚡ Uguu CDN'
+                          : file.provider === 'tmpfiles'
+                          ? '📦 TmpFiles'
+                          : file.provider === 'litterbox'
+                          ? '⏱️ Litterbox'
+                          : '🐱 Catbox'}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -481,7 +499,7 @@ export const AssetManager: React.FC<AssetManagerProps> = ({
 
                   {/* Actions Row */}
                   <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-slate-800/80 text-xs">
-                    {/* Copy Public Link (Catbox) or Share Link */}
+                    {/* Copy Public Link (ImgBB/Catbox) or Share Link */}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -494,10 +512,16 @@ export const AssetManager: React.FC<AssetManagerProps> = ({
                           ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
                           : 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30'
                       }`}
-                      title={file.externalUrl ? 'Sao chép link công khai Catbox' : 'Sao chép link trực tiếp'}
+                      title={file.externalUrl ? 'Sao chép link công khai trực tiếp' : 'Sao chép link trực tiếp'}
                     >
                       {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{isCopied ? 'Đã copy' : file.externalUrl ? 'Copy Link Catbox' : 'Copy Link'}</span>
+                      <span>
+                        {isCopied
+                          ? 'Đã copy'
+                          : file.externalUrl
+                          ? (file.provider === 'imgbb' ? 'Copy Link ImgBB' : file.provider === 'catbox' ? 'Copy Link Catbox' : 'Copy Link Online')
+                          : 'Copy Link'}
+                      </span>
                     </button>
 
                     {/* QR Code */}

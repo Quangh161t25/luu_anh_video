@@ -15,10 +15,11 @@ import {
   Layers,
   HelpCircle,
   Play,
-  Globe2
+  Globe2,
+  Image as ImageIcon
 } from 'lucide-react';
 import { IntegrationsConfig, StorageProvider } from '../types';
-import { saveIntegrationsConfig } from '../utils/api';
+import { saveIntegrationsConfig, uploadDirectImgbb } from '../utils/api';
 
 interface IntegrationsHubProps {
   config: IntegrationsConfig;
@@ -32,7 +33,10 @@ export const IntegrationsHub: React.FC<IntegrationsHubProps> = ({
   onOpenSheetsTab,
 }) => {
   // Modal states for configuring each service
-  const [activeModal, setActiveModal] = useState<'catbox' | 'discord' | 'telegram' | 'webhook' | null>(null);
+  const [activeModal, setActiveModal] = useState<'imgbb' | 'catbox' | 'discord' | 'telegram' | 'webhook' | null>(null);
+
+  // Form states for ImgBB
+  const [imgbbApiKey, setImgbbApiKey] = useState(config.imgbb?.apiKey || '');
 
   // Form states for Catbox
   const [catboxUserhash, setCatboxUserhash] = useState(config.catbox?.userhash || '');
@@ -63,15 +67,55 @@ export const IntegrationsHub: React.FC<IntegrationsHubProps> = ({
     saveIntegrationsConfig(newCfg);
   };
 
-  const handleToggleService = (service: 'catbox' | 'googleSheets' | 'discord' | 'telegram' | 'customWebhook') => {
+  const handleToggleService = (service: 'imgbb' | 'catbox' | 'googleSheets' | 'discord' | 'telegram' | 'customWebhook') => {
     const updated = {
       ...config,
       [service]: {
-        ...config[service],
-        enabled: !config[service].enabled,
+        ...(config as any)[service],
+        enabled: !(config as any)[service]?.enabled,
       },
     };
     saveConfig(updated);
+  };
+
+  const handleSaveImgbb = () => {
+    const updated: IntegrationsConfig = {
+      ...config,
+      imgbb: {
+        ...config.imgbb,
+        apiKey: imgbbApiKey.trim(),
+        enabled: true,
+      },
+    };
+    saveConfig(updated);
+    setActiveModal(null);
+  };
+
+  const handleTestImgbb = async () => {
+    setIsTesting(true);
+    setTestStatus(null);
+    try {
+      const base64Data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'image/png' });
+      const testFile = new File([blob], 'test_ping.png', { type: 'image/png' });
+
+      const res = await uploadDirectImgbb(testFile, imgbbApiKey.trim() || undefined);
+      setTestStatus({
+        service: 'imgbb',
+        success: true,
+        message: `✓ Kết nối ImgBB thành công! Link ảnh kiểm tra: ${res.url}`,
+      });
+    } catch (e: any) {
+      setTestStatus({ service: 'imgbb', success: false, message: `Lỗi kết nối ImgBB: ${e.message}` });
+    } finally {
+      setIsTesting(false);
+    }
   };
 
   const handleSaveCatbox = () => {
@@ -296,6 +340,70 @@ export const IntegrationsHub: React.FC<IntegrationsHubProps> = ({
 
       {/* Grid of Integration Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {/* CARD -1: IMGBB IMAGE HOSTING */}
+        <div className="bg-slate-900 rounded-2xl border border-pink-500/40 p-5 flex flex-col justify-between shadow-lg relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-pink-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-pink-500/20 text-pink-400 flex items-center justify-center border border-pink-500/30">
+                <ImageIcon className="w-5 h-5" />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/40">
+                  {config.imgbb?.enabled !== false ? 'Đang Bật' : 'Đang Tắt'}
+                </span>
+                <button
+                  onClick={() => handleToggleService('imgbb')}
+                  className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                    config.imgbb?.enabled !== false ? 'text-pink-400 hover:text-pink-300' : 'text-slate-600 hover:text-slate-400'
+                  }`}
+                  title="Bật/Tắt ImgBB"
+                >
+                  <Power className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <h4 className="font-bold text-white text-base">ImgBB Image Hosting</h4>
+            <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+              Lưu trữ hình ảnh <strong>vĩnh viễn</strong> lên CDN <code>i.ibb.co</code>. Tốc độ cực nhanh, hỗ trợ thumbnail và liên kết trực tiếp không bao giờ bị die link.
+            </p>
+
+            <div className="mt-4 pt-3 border-t border-slate-800 text-xs space-y-1.5 text-slate-300">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">Giới hạn tệp:</span>
+                <span className="text-pink-400 font-medium">32MB / ảnh (Vĩnh viễn)</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">API Key:</span>
+                <span className="text-white font-mono">{config.imgbb?.apiKey ? 'Đã gán Key riêng ✓' : 'Khóa mặc định (Miễn phí)'}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 pt-3 border-t border-slate-800 flex gap-2">
+            <button
+              onClick={() => setActiveModal('imgbb')}
+              className="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>Cài Đặt</span>
+            </button>
+
+            <button
+              onClick={handleTestImgbb}
+              disabled={isTesting}
+              className="px-3.5 py-2 rounded-xl bg-pink-600/20 hover:bg-pink-600/30 text-pink-300 border border-pink-500/40 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1"
+              title="Thử nghiệm tải lên ImgBB"
+            >
+              <Play className="w-3.5 h-3.5" />
+              <span>Thử</span>
+            </button>
+          </div>
+        </div>
+
         {/* CARD 0: CATBOX.MOE & PUBLIC HOSTING */}
         <div className="bg-slate-900 rounded-2xl border border-sky-500/40 p-5 flex flex-col justify-between shadow-lg relative overflow-hidden">
           <div className="absolute top-0 right-0 w-24 h-24 bg-sky-500/10 rounded-full blur-2xl pointer-events-none" />
@@ -987,6 +1095,65 @@ export const IntegrationsHub: React.FC<IntegrationsHubProps> = ({
                 <button
                   onClick={handleSaveCatbox}
                   className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-lg shadow-sky-600/30 cursor-pointer"
+                >
+                  Lưu cài đặt
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* IMGBB CONFIG MODAL */}
+      {activeModal === 'imgbb' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-lg space-y-4 shadow-2xl">
+            <h3 className="font-bold text-white text-base flex items-center gap-2">
+              <ImageIcon className="w-5 h-5 text-pink-400" />
+              <span>Cài đặt ImgBB Image Hosting</span>
+            </h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              ImgBB hỗ trợ lưu trữ hình ảnh vĩnh viễn với mạng CDN phân phối tốc độ cao. Bạn có thể sử dụng khóa API mặc định hoặc nhập API Key cá nhân từ ImgBB.
+            </p>
+
+            <div className="space-y-4 pt-1">
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-1">
+                  ImgBB API Key (Tùy chọn):
+                </label>
+                <input
+                  type="text"
+                  placeholder="Để trống nếu muốn dùng khóa mặc định hệ thống"
+                  value={imgbbApiKey}
+                  onChange={(e) => setImgbbApiKey(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-pink-500 font-mono"
+                />
+                <span className="text-[11px] text-slate-500 block mt-1">
+                  Lấy API Key miễn phí tại <a href="https://api.imgbb.com" target="_blank" rel="noreferrer" className="text-pink-400 hover:underline">api.imgbb.com</a>.
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+              <button
+                onClick={handleTestImgbb}
+                disabled={isTesting}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+              >
+                <Play className="w-3.5 h-3.5 text-pink-400" />
+                <span>{isTesting ? 'Đang test...' : 'Thử nghiệm upload'}</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setActiveModal(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-semibold cursor-pointer"
+                >
+                  Huỷ
+                </button>
+                <button
+                  onClick={handleSaveImgbb}
+                  className="px-4 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-white text-xs font-semibold shadow-lg shadow-pink-600/30 cursor-pointer"
                 >
                   Lưu cài đặt
                 </button>

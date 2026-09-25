@@ -7,6 +7,10 @@ const FILES_STORAGE_KEY = 'cloudasset_files_v1';
 const SHEET_RECORDS_STORAGE_KEY = 'cloudasset_sheet_records_v1';
 
 export const DEFAULT_INTEGRATIONS_CONFIG: IntegrationsConfig = {
+  imgbb: {
+    enabled: true,
+    apiKey: '',
+  },
   catbox: {
     enabled: true,
     autoUploadToCatbox: true,
@@ -51,6 +55,7 @@ export function loadIntegrationsConfig(): IntegrationsConfig {
       return {
         ...DEFAULT_INTEGRATIONS_CONFIG,
         ...parsed,
+        imgbb: { ...DEFAULT_INTEGRATIONS_CONFIG.imgbb, ...(parsed.imgbb || {}) },
         catbox: { ...DEFAULT_INTEGRATIONS_CONFIG.catbox, ...(parsed.catbox || {}) },
         googleSheets: { ...DEFAULT_INTEGRATIONS_CONFIG.googleSheets, ...(parsed.googleSheets || {}) },
         discord: { ...DEFAULT_INTEGRATIONS_CONFIG.discord, ...(parsed.discord || {}) },
@@ -231,6 +236,33 @@ export function fileToBase64(file: File): Promise<string> {
 
 // Direct Client-Side Cloud Uploaders (100% compatible with Vercel, no size limitations)
 
+export async function uploadDirectImgbb(
+  file: File,
+  apiKey?: string
+): Promise<{ url: string; displayUrl: string; thumbUrl?: string; deleteUrl?: string }> {
+  const key = apiKey && apiKey.trim() ? apiKey.trim() : '30a66d03f69527cf65516fc413c66f27';
+  const form = new FormData();
+  form.append('image', file);
+
+  const res = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(key)}`, {
+    method: 'POST',
+    body: form,
+  });
+
+  const data = await res.json();
+  if (res.ok && data.success && data.data?.url) {
+    return {
+      url: data.data.url,
+      displayUrl: data.data.display_url || data.data.url,
+      thumbUrl: data.data.thumb?.url || data.data.url,
+      deleteUrl: data.data.delete_url,
+    };
+  }
+
+  const errorMsg = data?.error?.message || `ImgBB upload failed with status ${res.status}`;
+  throw new Error(errorMsg);
+}
+
 async function uploadDirectUguu(file: File): Promise<string> {
   const form = new FormData();
   form.append('files[]', file, file.name);
@@ -360,7 +392,8 @@ export async function uploadFileToServer(
     litterboxExpiry?: '1h' | '12h' | '24h' | '72h';
   }
 ): Promise<StoredFile> {
-  const cfg = loadIntegrationsConfig().catbox;
+  const fullConfig = loadIntegrationsConfig();
+  const cfg = fullConfig.catbox;
   const requestedProvider = options?.provider || cfg.defaultProvider || 'catbox';
   const userhash = options?.userhash ?? cfg.userhash;
   const litterboxExpiry = options?.litterboxExpiry || cfg.litterboxExpiry || '72h';
@@ -396,11 +429,40 @@ export async function uploadFileToServer(
     } catch (e) {}
   }
 
-  // Attempt Direct Cloud Upload (Uguu / Catbox / TmpFiles / Litterbox)
+  // Attempt Direct Cloud Upload (ImgBB / Catbox / Uguu / TmpFiles / Litterbox)
   let externalUrl: string | undefined = undefined;
+  let thumbUrl: string | undefined = undefined;
   let actualProvider: StorageProvider = requestedProvider;
 
-  if (requestedProvider === 'catbox') {
+  if (requestedProvider === 'imgbb') {
+    let uploaded = false;
+    // 1. Try ImgBB if it's an image
+    if (detectedCategory === 'image') {
+      try {
+        const imgbbRes = await uploadDirectImgbb(file, fullConfig.imgbb?.apiKey);
+        externalUrl = imgbbRes.url;
+        thumbUrl = imgbbRes.thumbUrl;
+        actualProvider = 'imgbb';
+        uploaded = true;
+      } catch (imgbbErr: any) {
+        console.warn('ImgBB direct failed, falling back to Catbox/Uguu:', imgbbErr.message);
+      }
+    }
+    // Fallback to Catbox or Uguu
+    if (!uploaded) {
+      try {
+        externalUrl = await uploadDirectCatbox(file, userhash);
+        actualProvider = 'catbox';
+        uploaded = true;
+      } catch (catboxErr: any) {
+        try {
+          externalUrl = await uploadDirectUguu(file);
+          actualProvider = 'uguu';
+          uploaded = true;
+        } catch (uguuErr) {}
+      }
+    }
+  } else if (requestedProvider === 'catbox') {
     let uploaded = false;
     // 1. Try Catbox direct
     try {
@@ -512,6 +574,7 @@ export async function uploadFileToServer(
     lineCount,
     wordCount,
     textSnippet,
+    thumbUrl: thumbUrl || (detectedCategory === 'image' ? (externalUrl || URL.createObjectURL(file)) : undefined),
     syncedToGoogleSheet: false,
     externalUrl,
     provider: actualProvider,
@@ -532,6 +595,7 @@ export async function uploadFileToServer(
 
   if (externalUrl) {
     const serviceName: ApiLogEntry['service'] = 
+      actualProvider === 'imgbb' ? 'ImgBB' :
       actualProvider === 'uguu' ? 'Uguu.se' :
       actualProvider === 'tmpfiles' ? 'TmpFiles' :
       actualProvider === 'litterbox' ? 'Litterbox' :

@@ -1,5 +1,5 @@
 export type FileCategory = 'image' | 'video' | 'text' | 'document' | 'other';
-export type StorageProvider = 'uguu' | 'catbox' | 'tmpfiles' | 'litterbox' | '0x0' | 'local';
+export type StorageProvider = 'imgbb' | 'catbox' | 'uguu' | 'tmpfiles' | 'litterbox' | '0x0' | 'local';
 
 export interface StoredFile {
   id: string;
@@ -26,6 +26,7 @@ export interface StoredFile {
   shortUrl: string;
   externalUrl?: string;
   provider?: StorageProvider;
+  thumbUrl?: string;
 }
 
 export interface SheetRecord {
@@ -41,6 +42,11 @@ export interface SheetRecord {
   status: 'synced' | 'pending' | 'failed';
   method: string;
   error?: string;
+}
+
+export interface ImgbbConfig {
+  enabled: boolean;
+  apiKey: string;
 }
 
 export interface CatboxConfig {
@@ -85,6 +91,7 @@ export interface CustomWebhookConfig {
 }
 
 export interface IntegrationsConfig {
+  imgbb?: ImgbbConfig;
   catbox: CatboxConfig;
   googleSheets: GoogleSheetsConfig;
   discord: DiscordConfig;
@@ -95,7 +102,7 @@ export interface IntegrationsConfig {
 export interface ApiLogEntry {
   id: string;
   timestamp: string;
-  service: 'Catbox' | 'Uguu.se' | 'TmpFiles' | 'Litterbox' | '0x0.st' | 'Google Sheets' | 'Discord' | 'Telegram' | 'Custom Webhook' | 'TinyURL';
+  service: 'ImgBB' | 'Catbox' | 'Uguu.se' | 'TmpFiles' | 'Litterbox' | '0x0.st' | 'Google Sheets' | 'Discord' | 'Telegram' | 'Custom Webhook' | 'TinyURL';
   target: string;
   fileName?: string;
   status: 'success' | 'failed' | 'pending';

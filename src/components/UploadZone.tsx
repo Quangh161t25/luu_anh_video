@@ -246,6 +246,18 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
               <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-700">
                 <button
                   type="button"
+                  onClick={() => setSelectedProvider('imgbb')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    selectedProvider === 'imgbb'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="ImgBB: Lưu trữ ảnh vĩnh viễn, CDN i.ibb.co tốc độ cao, hỗ trợ tạo thumbnail tự động"
+                >
+                  🖼️ ImgBB (Ảnh vĩnh viễn)
+                </button>
+                <button
+                  type="button"
                   onClick={() => setSelectedProvider('catbox')}
                   className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                     selectedProvider === 'catbox'

@@ -204,7 +204,7 @@ async function uploadToCatbox(buffer: Buffer, filename: string, mimeType: string
     method: 'POST',
     body: form,
     headers: {
-      'User-Agent': 'CloudAssetHub/1.0 (https://ais-pre-xs6khptdah3rrfnbbuq6in-563447778288.asia-east1.run.app)',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     },
   });
 
@@ -284,7 +284,7 @@ app.post('/api/catbox', express.raw({ type: '*/*', limit: '100mb' }), async (req
       method: 'POST',
       body: form,
       headers: {
-        'User-Agent': 'CloudAssetHub/1.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       },
     });
 
